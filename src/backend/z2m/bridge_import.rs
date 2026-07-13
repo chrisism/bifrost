@@ -327,7 +327,16 @@ impl Z2mBackend {
             })?;
         }
 
-        res.add(&link_room, Resource::Room(room))?;
+        // `add()` is a no-op once `link_room` already exists (e.g. after a
+        // restart, or if the room was first seen before its members were
+        // known), so it silently drops any membership changes picked up
+        // above. Force the freshly computed state (children/metadata) onto
+        // the existing resource too, so group membership actually stays in
+        // sync on every reconnect.
+        res.add(&link_room, Resource::Room(room.clone()))?;
+        res.update(&link_room.rid, |r: &mut Room| {
+            *r = room;
+        })?;
 
         let glight = GroupedLight::new(link_room);
 
