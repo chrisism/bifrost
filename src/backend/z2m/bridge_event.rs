@@ -3,7 +3,11 @@ use serde_json::Value;
 use tokio_tungstenite::tungstenite;
 use uuid::Uuid;
 
-use hue::api::{DimmingUpdate, GroupedLight, Light, LightUpdate, RType, Resource, Room};
+use std::collections::HashSet;
+
+use hue::api::{
+    DimmingUpdate, GroupedLight, Light, LightUpdate, RType, Resource, ResourceLink, Room,
+};
 use z2m::api::{
     BridgeDevices, DeviceRemoveResponse, GroupMemberChange, Message, RawMessage, Response,
 };
@@ -133,6 +137,53 @@ impl Z2mBackend {
             */
         }
 
+        self.prune_lights_outside_group_prefix().await?;
+
+        Ok(())
+    }
+
+    /// When `group_prefix` is configured, hide any light whose device is not
+    /// a member of a room that matched the prefix (see `add_group`). Without
+    /// this, `group_prefix` only ever filtered which *groups/rooms* were
+    /// exposed -- every individual Z2M light was still added unconditionally
+    /// in `bridge_devices` above, which defeats the point of using
+    /// `group_prefix` to keep the exposed light count small (e.g. to work
+    /// around the TV's Ambilight+Hue light-count limit).
+    async fn prune_lights_outside_group_prefix(&mut self) -> ApiResult<()> {
+        if self.server.group_prefix.is_none() {
+            return Ok(());
+        }
+
+        let mut res = self.state.lock().await;
+
+        let allowed: HashSet<ResourceLink> = res
+            .get_resources_by_type(RType::Room)
+            .into_iter()
+            .filter_map(|rr| {
+                let room: Room = rr.obj.try_into().ok()?;
+                Some(room.children)
+            })
+            .flatten()
+            .collect();
+
+        let orphans: Vec<ResourceLink> = res
+            .get_resources_by_type(RType::Light)
+            .into_iter()
+            .filter_map(|rr| {
+                let light: Light = rr.obj.try_into().ok()?;
+                Some(light.owner)
+            })
+            .filter(|owner| !allowed.contains(owner))
+            .collect();
+
+        for owner in orphans {
+            log::info!(
+                "[{}] Hiding light outside group_prefix: {owner:?}",
+                self.name
+            );
+            res.delete(&owner)?;
+        }
+
         Ok(())
     }
 
@@ -227,6 +278,7 @@ impl Z2mBackend {
                 for grp in obj {
                     self.add_group(grp).await?;
                 }
+                self.prune_lights_outside_group_prefix().await?;
             }
 
             Message::BridgeGroupMembersAdd(change) | Message::BridgeGroupMembersRemove(change) => {
