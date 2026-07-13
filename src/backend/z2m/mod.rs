@@ -79,6 +79,12 @@ pub struct Z2mBackend {
     ignore: HashSet<String>,
     network: HashMap<String, z2m::api::Device>,
     entstream: Option<EntStream>,
+    // Whether we have processed at least one `bridge/groups` sync. Guards
+    // `prune_lights_outside_group_prefix()`: on a fresh connect, `bridge/devices`
+    // typically arrives before `bridge/groups`, so pruning before any group is
+    // known would (incorrectly) delete every light, since none of them are a
+    // member of an "allowed" room yet.
+    groups_seen: bool,
     counter: u32,
     fps: u32,
     throttle: Throttle,
@@ -119,6 +125,7 @@ impl Z2mBackend {
             ignore,
             network,
             entstream,
+            groups_seen: false,
             throttle,
             fps,
             message_rx,

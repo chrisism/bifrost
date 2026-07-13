@@ -137,7 +137,12 @@ impl Z2mBackend {
             */
         }
 
-        self.prune_lights_outside_group_prefix().await?;
+        // Only prune once we've actually processed a `bridge/groups` sync --
+        // otherwise, on a fresh connect (devices before groups), this would
+        // wipe every light before we know which ones are allowed.
+        if self.groups_seen {
+            self.prune_lights_outside_group_prefix().await?;
+        }
 
         Ok(())
     }
@@ -278,6 +283,7 @@ impl Z2mBackend {
                 for grp in obj {
                     self.add_group(grp).await?;
                 }
+                self.groups_seen = true;
                 self.prune_lights_outside_group_prefix().await?;
             }
 
